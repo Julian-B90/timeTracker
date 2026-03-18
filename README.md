@@ -18,11 +18,11 @@ A VS Code extension for tracking time against Azure DevOps work items using the 
 
 ## Extension Settings
 
-| Setting | Description |
-|---|---|
-| `timeTracker.apiToken` | API token for the 7pace Timetracker. |
-| `timeTracker.instanceUrl` | Your 7pace Timehub instance URL, e.g. `https://myorg.timehub.7pace.com`. |
-| `timeTracker.branchPattern` | Regex to extract the ticket ID from a branch name. The first capture group is used. Default: `(?:feature|bugfix|hotfix|fix|task)[/\\](\d+)`. |
+| Setting                     | Description                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------- | ------ | ------ | --- | ----------------- |
+| `timeTracker.apiToken`      | API token for the 7pace Timetracker.                                                                     |
+| `timeTracker.instanceUrl`   | Your 7pace Timehub instance URL, e.g. `https://myorg.timehub.7pace.com`.                                 |
+| `timeTracker.branchPattern` | Regex to extract the ticket ID from a branch name. The first capture group is used. Default: `(?:feature | bugfix | hotfix | fix | task)[/\\](\d+)`. |
 
 Run **TimeTracker: Configure** (or click ⚙ in the panel) to open the settings page directly.
 
