@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 import { TimerManager, formatDuration } from './timerManager';
 import { getCurrentBranchInfo } from './gitHelper';
-import { getRecentEntries, TimeEntry } from './apiClient';
+import { getRecentEntries, getActivityTypeSettings, TimeEntry, ActivityType } from './apiClient';
 
 export class TrackerPanelProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = '7pace-tracker.mainView';
+  public static readonly viewType = 'timeTracker.mainView';
 
   private _view?: vscode.WebviewView;
   private _timer: TimerManager;
@@ -34,27 +34,35 @@ export class TrackerPanelProvider implements vscode.WebviewViewProvider {
   private async _refresh() {
     if (!this._view) { return; }
     const branchInfo = await getCurrentBranchInfo();
-    const entries = await getRecentEntries();
+    const [entries, activityTypeSettings] = await Promise.all([
+      getRecentEntries(),
+      getActivityTypeSettings(),
+    ]);
     this._view.webview.html = getWebviewContent({
       timer: this._timer,
       branchInfo,
       entries,
+      activityTypes: activityTypeSettings.activityTypes,
+      activityTypesEnabled: activityTypeSettings.enabled,
     });
   }
 
   private async _handleMessage(message: any) {
     switch (message.command) {
       case 'start':
-        await vscode.commands.executeCommand('7pace-tracker.startTimer');
+        await vscode.commands.executeCommand('timeTracker.startTimer', message.data);
         break;
       case 'stop':
-        await vscode.commands.executeCommand('7pace-tracker.stopTimer');
+        await vscode.commands.executeCommand('timeTracker.stopTimer');
         break;
       case 'log':
-        await vscode.commands.executeCommand('7pace-tracker.logTime', message.data);
+        await vscode.commands.executeCommand('timeTracker.logTime', message.data);
         break;
       case 'configure':
-        await vscode.commands.executeCommand('7pace-tracker.configure');
+        await vscode.commands.executeCommand('timeTracker.configure');
+        break;
+      case 'test':
+        await vscode.commands.executeCommand('timeTracker.testConnection');
         break;
       case 'refresh':
         await this._refresh();
@@ -71,25 +79,103 @@ interface WebviewData {
   timer: TimerManager;
   branchInfo: { branchName: string; ticketId: string | null } | null;
   entries: TimeEntry[];
+  activityTypes: ActivityType[];
+  activityTypesEnabled: boolean;
 }
 
-function getWebviewContent({ timer, branchInfo, entries }: WebviewData): string {
+function getSelectedActivity(activityTypes: ActivityType[], activityTypeId?: string): ActivityType | undefined {
+  if (!activityTypeId) { return undefined; }
+  return activityTypes.find((activityType) => activityType.id === activityTypeId);
+}
+
+function getDefaultActivity(activityTypes: ActivityType[]): ActivityType | undefined {
+  return activityTypes.find((activityType) => activityType.isDefault);
+}
+
+function renderActivityOptions(activityTypes: ActivityType[], selectedActivityId: string): string {
+  return activityTypes.map((activityType) => {
+    const selected = activityType.id === selectedActivityId ? ' selected' : '';
+    const suffix = activityType.isDefault ? ' (default)' : '';
+    const style = activityType.color ? ` style="color:${activityType.color}"` : '';
+    return `<option value="${activityType.id}"${selected}${style}>${activityType.name}${suffix}</option>`;
+  }).join('');
+}
+
+function renderActivityHint(activityType?: ActivityType): string {
+  if (!activityType) { return ''; }
+
+  return `
+    <div class="activity-hint">
+      <span class="activity-color"${activityType.color ? ` style="background:${activityType.color}"` : ''}></span>
+      <span>${activityType.name}${activityType.isDefault ? ' · Default activity' : ''}</span>
+    </div>`;
+}
+
+function getEntryActivity(activityTypes: ActivityType[], entry: TimeEntry): { name: string; color?: string } | undefined {
+  if (entry.activityTypeName) {
+    const matchedActivity = entry.activityTypeId
+      ? activityTypes.find((activityType) => activityType.id === entry.activityTypeId)
+      : undefined;
+
+    return {
+      name: entry.activityTypeName,
+      color: matchedActivity?.color,
+    };
+  }
+
+  if (!entry.activityTypeId) { return undefined; }
+
+  const matchedActivity = activityTypes.find((activityType) => activityType.id === entry.activityTypeId);
+  if (!matchedActivity) { return undefined; }
+
+  return {
+    name: matchedActivity.name,
+    color: matchedActivity.color,
+  };
+}
+
+function renderActivitySelector(id: string, activityTypes: ActivityType[], selectedActivityId: string, activityTypesEnabled: boolean): string {
+  const disabled = !activityTypesEnabled || activityTypes.length === 0;
+  const hint = !activityTypesEnabled
+    ? '<div class="activity-disabled-note">Activity types are disabled in 7pace.</div>'
+    : activityTypes.length === 0
+      ? '<div class="activity-disabled-note">No activity types available.</div>'
+      : renderActivityHint(getSelectedActivity(activityTypes, selectedActivityId));
+
+  return `
+    <select id="${id}"${disabled ? ' disabled' : ''}>
+      <option value="">-- none --</option>
+      ${renderActivityOptions(activityTypes, selectedActivityId)}
+    </select>
+    ${hint}`;
+}
+
+function getWebviewContent({ timer, branchInfo, entries, activityTypes, activityTypesEnabled }: WebviewData): string {
   const isRunning = timer.isRunning;
   const session = timer.session;
   const elapsed = timer.elapsedSeconds;
   const elapsedStr = formatDuration(elapsed);
   const ticketId = session?.ticketId || branchInfo?.ticketId || '';
   const branch = branchInfo?.branchName || '—';
+  const defaultActivity = getDefaultActivity(activityTypes);
+  const timerActivityId = session?.activityTypeId || defaultActivity?.id || '';
+  const logActivityId = defaultActivity?.id || '';
+  const timerActivity = getSelectedActivity(activityTypes, timerActivityId);
+  const logActivity = getSelectedActivity(activityTypes, logActivityId);
 
   const entriesHtml = entries.length === 0
     ? '<p class="empty">No entries in the last 7 days</p>'
     : entries.slice(0, 10).map(e => {
         const d = new Date(e.date).toLocaleDateString();
         const dur = formatDuration(e.length);
+        const activity = getEntryActivity(activityTypes, e);
         return `
           <div class="entry">
             <span class="entry-ticket">#${e.workItemId}</span>
-            <span class="entry-comment">${e.comment || '—'}</span>
+            <div class="entry-main">
+              <span class="entry-comment">${e.comment || '—'}</span>
+              ${activity ? `<span class="entry-activity"><span class="activity-color"${activity.color ? ` style="background:${activity.color}"` : ''}></span>${activity.name}</span>` : ''}
+            </div>
             <span class="entry-meta">${d} · ${dur}</span>
           </div>`;
       }).join('');
@@ -193,10 +279,36 @@ function getWebviewContent({ timer, branchInfo, entries }: WebviewData): string 
     font-size: 13px;
     outline: none;
   }
-  input:focus, textarea:focus {
+  input:focus, textarea:focus, select:focus {
     border-color: var(--accent);
   }
   textarea { resize: vertical; min-height: 50px; }
+  select {
+    width: 100%;
+    background: var(--input-bg);
+    color: var(--input-fg);
+    border: 1px solid var(--input-border, transparent);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+  }
+  .activity-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .activity-color {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--accent);
+    flex: 0 0 auto;
+  }
 
   /* ── Buttons ── */
   .btn-row { display: flex; gap: 8px; }
@@ -289,11 +401,29 @@ function getWebviewContent({ timer, branchInfo, entries }: WebviewData): string 
     white-space: nowrap;
     color: var(--muted);
   }
+  .entry-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .entry-activity {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+  }
   .entry-meta {
     font-size: 11px;
     color: var(--muted);
     white-space: nowrap;
     text-align: right;
+  }
+  .activity-disabled-note {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--muted);
   }
   .empty { color: var(--muted); font-size: 12px; text-align: center; padding: 12px 0; }
 
@@ -340,7 +470,7 @@ function getWebviewContent({ timer, branchInfo, entries }: WebviewData): string 
     </div>
     <div class="timer-sub">
       ${isRunning
-        ? `Tracking #${session!.ticketId} since ${session!.startTime.toLocaleTimeString()}`
+        ? `Tracking #${session!.ticketId} since ${session!.startTime.toLocaleTimeString()}${timerActivity ? ` · ${timerActivity.name}` : ''}`
         : 'Timer stopped'}
     </div>
   </div>
@@ -354,12 +484,18 @@ function getWebviewContent({ timer, branchInfo, entries }: WebviewData): string 
     <input id="timerComment" type="text" placeholder="Optional comment..."
       value="${isRunning ? session!.comment : ''}">
   </div>
+  <div>
+    <label>Activity Type</label>
+    ${renderActivitySelector('timerActivity', activityTypes, timerActivityId, activityTypesEnabled)}
+  </div>
 
+  <div id="timerError" style="color:var(--vscode-inputValidation-errorForeground,#f48771);font-size:11px;margin-top:2px;display:none"></div>
   <div class="btn-row">
     ${isRunning
       ? `<button class="btn-stop" onclick="stopTimer()">⏹ Stop &amp; Log</button>`
       : `<button class="btn-start" onclick="startTimer()">▶ Start Timer</button>`}
     <button class="btn-secondary" onclick="configure()" title="Settings">⚙</button>
+    <button class="btn-secondary" onclick="testConnection()" title="Test Connection">🔗</button>
   </div>
 </div>
 
@@ -384,6 +520,11 @@ function getWebviewContent({ timer, branchInfo, entries }: WebviewData): string 
     <label>Comment</label>
     <input id="logComment" type="text" placeholder="What did you work on?">
   </div>
+  <div>
+    <label>Activity Type</label>
+    ${renderActivitySelector('logActivity', activityTypes, logActivityId, activityTypesEnabled)}
+  </div>
+  <div id="logError" style="color:var(--vscode-inputValidation-errorForeground,#f48771);font-size:11px;margin-top:2px;display:none"></div>
   <div class="btn-row">
     <button class="btn-log" onclick="logManual()">✓ Log Time</button>
   </div>
@@ -398,11 +539,20 @@ function getWebviewContent({ timer, branchInfo, entries }: WebviewData): string 
 <script>
   const vscode = acquireVsCodeApi();
 
+  function showError(id, msg) {
+    const el = document.getElementById(id);
+    if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
   function startTimer() {
     const ticketId = document.getElementById('ticketId').value.trim();
     const comment = document.getElementById('timerComment').value.trim();
-    if (!ticketId) { alert('Please enter a ticket ID'); return; }
-    vscode.postMessage({ command: 'start', data: { ticketId, comment } });
+    const activityTypeId = document.getElementById('timerActivity').value;
+    if (!ticketId) { showError('timerError', 'Please enter a ticket ID'); return; }
+    showError('timerError', '');
+    vscode.postMessage({ command: 'start', data: { ticketId, comment, activityTypeId } });
   }
 
   function stopTimer() {
@@ -415,13 +565,19 @@ function getWebviewContent({ timer, branchInfo, entries }: WebviewData): string 
     const duration = document.getElementById('logDuration').value.trim();
     const date = document.getElementById('logDate').value;
     const comment = document.getElementById('logComment').value.trim();
-    if (!ticket) { alert('Please enter a ticket ID'); return; }
-    if (!duration) { alert('Please enter a duration'); return; }
-    vscode.postMessage({ command: 'log', data: { ticket, duration, date, comment } });
+    const activityTypeId = document.getElementById('logActivity').value;
+    if (!ticket) { showError('logError', 'Please enter a ticket ID'); return; }
+    if (!duration) { showError('logError', 'Please enter a duration'); return; }
+    showError('logError', '');
+    vscode.postMessage({ command: 'log', data: { ticket, duration, date, comment, activityTypeId } });
   }
 
   function configure() {
     vscode.postMessage({ command: 'configure' });
+  }
+
+  function testConnection() {
+    vscode.postMessage({ command: 'test' });
   }
 
   function refresh() {

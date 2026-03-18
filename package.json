@@ -12,26 +12,71 @@
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "timeTrackerContainer",
+          "title": "TimeTracker",
+          "icon": "$(watch)"
+        }
+      ]
+    },
+    "views": {
+      "timeTrackerContainer": [
+        {
+          "type": "webview",
+          "id": "timeTracker.mainView",
+          "name": "TimeTracker"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "TimeTracker",
+      "properties": {
+        "timeTracker.apiToken": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "API token for 7pace Timetracker. Generate one in your Azure DevOps organization under **7pace → Settings → API Tokens**.",
+          "order": 1
+        },
+        "timeTracker.instanceUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "7pace Timehub instance URL, e.g. `https://myorg.timehub.7pace.com`.",
+          "order": 2
+        },
+        "timeTracker.branchPattern": {
+          "type": "string",
+          "default": "(?:feature|bugfix|hotfix|fix|task)[/\\\\](\\d+)",
+          "markdownDescription": "Regular expression to extract the ticket ID from a branch name. The **first capture group** is used as the ticket ID.",
+          "order": 3
+        }
+      }
+    },
     "commands": [
       {
-        "command": "7pace-tracker.startTimer",
-        "title": "7pace: Start Timer"
+        "command": "timeTracker.startTimer",
+        "title": "TimeTracker: Start Timer"
       },
       {
-        "command": "7pace-tracker.stopTimer",
-        "title": "7pace: Stop Timer"
+        "command": "timeTracker.stopTimer",
+        "title": "TimeTracker: Stop Timer"
       },
       {
-        "command": "7pace-tracker.logTime",
-        "title": "7pace: Log Time"
+        "command": "timeTracker.logTime",
+        "title": "TimeTracker: Log Time"
       },
       {
-        "command": "7pace-tracker.configure",
-        "title": "7pace: Configure"
+        "command": "timeTracker.configure",
+        "title": "TimeTracker: Configure"
       },
       {
-        "command": "7pace-tracker.showPanel",
-        "title": "7pace: Show Panel"
+        "command": "timeTracker.showPanel",
+        "title": "TimeTracker: Show Panel"
+      },
+      {
+        "command": "timeTracker.testConnection",
+        "title": "TimeTracker: Test Connection"
       }
     ]
   },

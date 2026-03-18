@@ -5,6 +5,7 @@ export interface TimerSession {
   branchName: string;
   startTime: Date;
   comment: string;
+  activityTypeId?: string;
 }
 
 export class TimerManager {
@@ -20,7 +21,7 @@ export class TimerManager {
       vscode.StatusBarAlignment.Left,
       100
     );
-    this._statusBarItem.command = '7pace-tracker.showPanel';
+    this._statusBarItem.command = 'timeTracker.showPanel';
     this._statusBarItem.show();
     this._updateStatusBar();
   }
@@ -38,11 +39,11 @@ export class TimerManager {
     return Math.floor((Date.now() - this._session.startTime.getTime()) / 1000);
   }
 
-  start(ticketId: string, branchName: string, comment: string = ''): void {
+  start(ticketId: string, branchName: string, comment: string = '', activityTypeId?: string): void {
     if (this._session) {
       this.stop();
     }
-    this._session = { ticketId, branchName, startTime: new Date(), comment };
+    this._session = { ticketId, branchName, startTime: new Date(), comment, activityTypeId };
     this._tickInterval = setInterval(() => this._updateStatusBar(), 1000);
     this._updateStatusBar();
     this._onSessionChange.fire(this._session);

@@ -1,11 +1,26 @@
 import * as vscode from 'vscode';
 
+export interface ActivityType {
+  id: string;
+  name: string;
+  color?: string;
+  isDefault?: boolean;
+  isNotSet?: boolean;
+}
+
+export interface ActivityTypeSettings {
+  enabled: boolean;
+  activityTypes: ActivityType[];
+}
+
 export interface TimeEntry {
   id?: string;
   workItemId: string;
   date: string;       // ISO string
   length: number;     // seconds
   comment?: string;
+  activityTypeId?: string;
+  activityTypeName?: string;
 }
 
 export interface WorkItem {
@@ -17,11 +32,10 @@ export interface WorkItem {
 }
 
 function getConfig() {
-  const cfg = vscode.workspace.getConfiguration('7pace-tracker');
+  const cfg = vscode.workspace.getConfiguration('timeTracker');
   return {
     apiToken: cfg.get<string>('apiToken') || '',
-    orgUrl: cfg.get<string>('organizationUrl') || '',
-    project: cfg.get<string>('project') || '',
+    instanceUrl: cfg.get<string>('instanceUrl')?.replace(/\/$/, '') || '',
   };
 }
 
@@ -32,29 +46,50 @@ function buildHeaders(apiToken: string): Record<string, string> {
   };
 }
 
-/**
- * 7pace Timetracker REST API v2
- * Docs: https://www.7pace.com/api-docs
- */
-export async function logTimeEntry(entry: TimeEntry): Promise<boolean> {
-  const { apiToken, orgUrl, project } = getConfig();
+export function isConfigured(): boolean {
+  const { apiToken, instanceUrl } = getConfig();
+  return Boolean(apiToken && instanceUrl);
+}
 
-  if (!apiToken || !orgUrl || !project) {
+export async function testConnection(): Promise<{ ok: boolean; message: string }> {
+  const { apiToken, instanceUrl } = getConfig();
+  if (!apiToken || !instanceUrl) {
+    return { ok: false, message: 'Configuration incomplete — set apiToken and instanceUrl first.' };
+  }
+  const url = `${instanceUrl}/api/rest/me?api-version=3.2`;
+  try {
+    const response = await fetch(url, { headers: buildHeaders(apiToken) });
+    if (response.ok) {
+      return { ok: true, message: 'Connection successful.' };
+    }
+    const text = await response.text();
+    return { ok: false, message: `HTTP ${response.status}: ${text.slice(0, 120)}` };
+  } catch (err: unknown) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function logTimeEntry(entry: TimeEntry): Promise<boolean> {
+  const { apiToken, instanceUrl } = getConfig();
+
+  if (!apiToken || !instanceUrl) {
     vscode.window.showErrorMessage(
-      '7pace: Missing configuration. Run "7pace: Configure Settings" first.'
+      'timeTracker: Missing configuration. Run "timeTracker: Configure Settings" first.'
     );
     return false;
   }
 
-  // 7pace API endpoint
-  const url = `${orgUrl}/${project}/_apis/7pace/timetracking/entries?api-version=7pace`;
+  const url = `${instanceUrl}/api/rest/workLogs?api-version=3.2`;
 
-  const body = {
+  const body: Record<string, unknown> = {
     workItemId: parseInt(entry.workItemId, 10),
-    date: entry.date,
+    timestamp: entry.date,
     length: entry.length,
-    comment: entry.comment || '',
+    remark: entry.comment || '',
   };
+  if (entry.activityTypeId) {
+    body.activityTypeId = entry.activityTypeId;
+  }
 
   try {
     const response = await fetch(url, {
@@ -76,13 +111,13 @@ export async function logTimeEntry(entry: TimeEntry): Promise<boolean> {
 }
 
 export async function getRecentEntries(): Promise<TimeEntry[]> {
-  const { apiToken, orgUrl, project } = getConfig();
-  if (!apiToken || !orgUrl || !project) { return []; }
+  const { apiToken, instanceUrl } = getConfig();
+  if (!apiToken || !instanceUrl) { return []; }
 
-  const today = new Date().toISOString().split('T')[0];
-  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+  const today = new Date().toISOString();
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
 
-  const url = `${orgUrl}/${project}/_apis/7pace/timetracking/entries?from=${weekAgo}&to=${today}&api-version=7pace`;
+  const url = `${instanceUrl}/api/rest/workLogs?_fromTimestamp=${weekAgo}&_toTimestamp=${today}&api-version=3.2`;
 
   try {
     const response = await fetch(url, {
@@ -90,12 +125,19 @@ export async function getRecentEntries(): Promise<TimeEntry[]> {
     });
     if (!response.ok) { return []; }
     const data: any = await response.json();
-    return (data.value || data || []).map((e: any) => ({
+    const entries = data?.data?.value || data?.data || [];
+    return entries.map((e: any) => ({
       id: e.id,
       workItemId: String(e.workItemId),
-      date: e.date,
+      date: e.timestamp,
       length: e.length,
-      comment: e.comment,
+      comment: e.remark,
+      activityTypeId: e.activityTypeId ? String(e.activityTypeId) : undefined,
+      activityTypeName: typeof e.activityTypeName === 'string'
+        ? e.activityTypeName
+        : typeof e.activityType?.name === 'string'
+          ? e.activityType.name
+          : undefined,
     }));
   } catch {
     return [];
@@ -103,30 +145,114 @@ export async function getRecentEntries(): Promise<TimeEntry[]> {
 }
 
 export async function getWorkItem(ticketId: string): Promise<WorkItem | null> {
-  const { apiToken, orgUrl, project } = getConfig();
-  if (!apiToken || !orgUrl || !project) { return null; }
+  const { apiToken, instanceUrl } = getConfig();
+  if (!apiToken || !instanceUrl) { return null; }
 
-  const url = `${orgUrl}/${project}/_apis/wit/workitems/${ticketId}?api-version=7.0`;
+  const url = `${instanceUrl}/api/tracking/client/search?api-version=3.2`;
 
   try {
     const response = await fetch(url, {
+      method: 'POST',
       headers: buildHeaders(apiToken),
+      body: JSON.stringify({ query: ticketId }),
     });
     if (!response.ok) { return null; }
     const data: any = await response.json();
+    const items: any[] = data?.data ?? data ?? [];
+    const match = items.find((item: any) => String(item.id) === String(ticketId));
+    if (!match) { return null; }
     return {
-      id: String(data.id),
-      title: data.fields?.['System.Title'] || `Work Item ${ticketId}`,
-      type: data.fields?.['System.WorkItemType'],
-      state: data.fields?.['System.State'],
-      url: data._links?.html?.href,
+      id: String(match.id),
+      title: match.title || `Work Item ${ticketId}`,
+      type: match.workItemType,
+      state: match.state,
     };
   } catch {
     return null;
   }
 }
 
-export function isConfigured(): boolean {
-  const { apiToken, orgUrl, project } = getConfig();
-  return Boolean(apiToken && orgUrl && project);
+export async function startTracking(workItemId: string, comment?: string, activityTypeId?: string): Promise<boolean> {
+  const { apiToken, instanceUrl } = getConfig();
+  if (!apiToken || !instanceUrl) { return false; }
+
+  const url = `${instanceUrl}/api/tracking/client/startTracking?api-version=3.2`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: buildHeaders(apiToken),
+      body: JSON.stringify({
+        workItemId: parseInt(workItemId, 10),
+        remark: comment || '',
+        ...(activityTypeId ? { activityTypeId } : {}),
+      }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function mapActivityType(activityType: any, defaultActivityTypeId?: string): ActivityType {
+  return {
+    id: String(activityType.id),
+    name: String(activityType.name),
+    color: typeof activityType.color === 'string' ? activityType.color : undefined,
+    isDefault: Boolean(activityType.isDefault) || String(activityType.id) === defaultActivityTypeId,
+    isNotSet: Boolean(activityType.isNotSet),
+  };
+}
+
+export async function getActivityTypeSettings(): Promise<ActivityTypeSettings> {
+  const { apiToken, instanceUrl } = getConfig();
+  if (!apiToken || !instanceUrl) {
+    return { enabled: false, activityTypes: [] };
+  }
+
+  const url = `${instanceUrl}/api/rest/activityTypes?api-version=3.2`;
+
+  try {
+    const response = await fetch(url, { headers: buildHeaders(apiToken) });
+    if (!response.ok) {
+      return { enabled: false, activityTypes: [] };
+    }
+    const data: any = await response.json();
+    const defaultActivityTypeId = typeof data?.data?.systemDefaultActivityTypeId === 'string'
+      ? data.data.systemDefaultActivityTypeId
+      : undefined;
+    const items = data?.data?.activityTypes ?? data?.data?.value ?? data?.data;
+    if (!Array.isArray(items)) {
+      return { enabled: false, activityTypes: [] };
+    }
+    return {
+      enabled: Boolean(data?.data?.enabled),
+      activityTypes: items.map((activityType: any) => mapActivityType(activityType, defaultActivityTypeId)),
+    };
+  } catch {
+    return { enabled: false, activityTypes: [] };
+  }
+}
+
+export async function getActivityTypes(): Promise<ActivityType[]> {
+  const activityTypeSettings = await getActivityTypeSettings();
+  return activityTypeSettings.activityTypes;
+}
+
+export async function stopTracking(): Promise<boolean> {
+  const { apiToken, instanceUrl } = getConfig();
+  if (!apiToken || !instanceUrl) { return false; }
+
+  const url = `${instanceUrl}/api/tracking/client/stopTracking/manual?api-version=3.2`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: buildHeaders(apiToken),
+      body: JSON.stringify({}),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }

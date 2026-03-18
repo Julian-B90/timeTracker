@@ -1,40 +1,57 @@
 import * as vscode from 'vscode';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import * as path from 'path';
 
-const execAsync = promisify(exec);
+// Minimal subset of the VS Code Git extension API used by this module.
+interface GitExtension {
+  getAPI(version: 1): GitAPI;
+}
+
+interface GitAPI {
+  readonly repositories: Repository[];
+}
+
+interface Repository {
+  readonly state: RepositoryState;
+}
+
+interface RepositoryState {
+  readonly HEAD: Branch | undefined;
+  readonly onDidChange: vscode.Event<void>;
+}
+
+interface Branch {
+  readonly name?: string;
+}
 
 export interface BranchInfo {
   branchName: string;
   ticketId: string | null;
 }
 
+async function getGitAPI(): Promise<GitAPI | undefined> {
+  const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
+  if (!extension) { return undefined; }
+  if (!extension.isActive) {
+    await extension.activate();
+  }
+  return extension.exports.getAPI(1);
+}
+
 export async function getCurrentBranchInfo(): Promise<BranchInfo | null> {
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders || workspaceFolders.length === 0) {
-    return null;
+  const git = await getGitAPI();
+  const repo = git?.repositories[0];
+  if (!repo) { return null; }
+
+  const branchName = repo.state.HEAD?.name;
+  if (!branchName) {
+    return { branchName: 'HEAD', ticketId: null };
   }
 
-  const cwd = workspaceFolders[0].uri.fsPath;
-
-  try {
-    const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd });
-    const branchName = stdout.trim();
-
-    if (!branchName || branchName === 'HEAD') {
-      return { branchName: branchName || 'unknown', ticketId: null };
-    }
-
-    const ticketId = extractTicketId(branchName);
-    return { branchName, ticketId };
-  } catch {
-    return null;
-  }
+  const ticketId = extractTicketId(branchName);
+  return { branchName, ticketId };
 }
 
 export function extractTicketId(branchName: string): string | null {
-  const config = vscode.workspace.getConfiguration('7pace-tracker');
+  const config = vscode.workspace.getConfiguration('timeTracker');
   const pattern = config.get<string>('branchPattern') || '(?:feature|bugfix|hotfix|fix|task)[/\\\\](\\d+)';
 
   try {
@@ -53,21 +70,23 @@ export function extractTicketId(branchName: string): string | null {
 }
 
 export function watchBranchChanges(
-  workspaceRoot: string,
+  _workspaceRoot: string,
   onChange: (info: BranchInfo) => void
 ): vscode.Disposable {
-  const headFile = path.join(workspaceRoot, '.git', 'HEAD');
-  const watcher = vscode.workspace.createFileSystemWatcher(headFile);
+  const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
+  if (!extension?.isActive) {
+    return new vscode.Disposable(() => { /* git extension not active */ });
+  }
 
-  const handler = async () => {
+  const repo = extension.exports.getAPI(1).repositories[0];
+  if (!repo) {
+    return new vscode.Disposable(() => { /* no repository open */ });
+  }
+
+  return repo.state.onDidChange(async () => {
     const info = await getCurrentBranchInfo();
     if (info) {
       onChange(info);
     }
-  };
-
-  watcher.onDidChange(handler);
-  watcher.onDidCreate(handler);
-
-  return watcher;
+  });
 }

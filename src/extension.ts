@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { TimerManager } from './timerManager';
 import { TrackerPanelProvider } from './panelProvider';
 import { getCurrentBranchInfo, watchBranchChanges } from './gitHelper';
-import { logTimeEntry, isConfigured } from './apiClient';
+import { logTimeEntry, isConfigured, testConnection, startTracking, stopTracking } from './apiClient';
 
 let timer: TimerManager;
 let panelProvider: TrackerPanelProvider;
@@ -24,7 +24,7 @@ export function activate(context: vscode.ExtensionContext) {
   // ── Commands ──────────────────────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('7pace-tracker.startTimer', async (data?: any) => {
+    vscode.commands.registerCommand('timeTracker.startTimer', async (data?: any) => {
       if (timer.isRunning) {
         const answer = await vscode.window.showWarningMessage(
           `Timer already running for #${timer.session!.ticketId}. Stop and restart?`,
@@ -36,6 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
 
       let ticketId = data?.ticketId;
       let comment = data?.comment || '';
+      const activityTypeId = data?.activityTypeId || '';
 
       if (!ticketId) {
         const branchInfo = await getCurrentBranchInfo();
@@ -58,16 +59,17 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       const branchInfo = await getCurrentBranchInfo();
-      timer.start(ticketId, branchInfo?.branchName || '', comment);
-      vscode.window.setStatusBarMessage(`7pace: Timer started for #${ticketId}`, 3000);
+      timer.start(ticketId, branchInfo?.branchName || '', comment, activityTypeId || undefined);
+      vscode.window.setStatusBarMessage(`timeTracker: Timer started for #${ticketId}`, 3000);
+      startTracking(ticketId, comment, activityTypeId || undefined).catch(() => { /* silent */ });
       panelProvider.refresh();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('7pace-tracker.stopTimer', async () => {
+    vscode.commands.registerCommand('timeTracker.stopTimer', async () => {
       if (!timer.isRunning) {
-        vscode.window.showInformationMessage('7pace: No timer is running.');
+        vscode.window.showInformationMessage('timeTracker: No timer is running.');
         return;
       }
 
@@ -83,20 +85,15 @@ export function activate(context: vscode.ExtensionContext) {
 
       if (answer === 'Log') {
         if (!isConfigured()) {
-          await vscode.commands.executeCommand('7pace-tracker.configure');
+          await vscode.commands.executeCommand('timeTracker.configure');
           return;
         }
 
-        const ok = await logTimeEntry({
-          workItemId: session.ticketId,
-          date: session.startTime.toISOString(),
-          length: elapsed,
-          comment: session.comment,
-        });
+        const ok = await stopTracking();
 
         if (ok) {
           vscode.window.showInformationMessage(
-            `✓ 7pace: Logged ${formatDurationShort(elapsed)} for #${session.ticketId}`
+            `✓ timeTracker: Logged ${formatDurationShort(elapsed)} for #${session.ticketId}`
           );
         }
       }
@@ -106,9 +103,9 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('7pace-tracker.logTime', async (data?: any) => {
+    vscode.commands.registerCommand('timeTracker.logTime', async (data?: any) => {
       if (!isConfigured()) {
-        await vscode.commands.executeCommand('7pace-tracker.configure');
+        await vscode.commands.executeCommand('timeTracker.configure');
         return;
       }
 
@@ -116,6 +113,7 @@ export function activate(context: vscode.ExtensionContext) {
       let durationStr = data?.duration;
       let dateStr = data?.date;
       let comment = data?.comment || '';
+      const activityTypeId = data?.activityTypeId || '';
 
       if (!ticketId) {
         const branch = await getCurrentBranchInfo();
@@ -137,7 +135,7 @@ export function activate(context: vscode.ExtensionContext) {
 
       const seconds = parseDuration(durationStr);
       if (seconds <= 0) {
-        vscode.window.showErrorMessage(`7pace: Could not parse duration "${durationStr}"`);
+        vscode.window.showErrorMessage(`timeTracker: Could not parse duration "${durationStr}"`);
         return;
       }
 
@@ -149,10 +147,10 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       const date = dateStr || new Date().toISOString();
-      const ok = await logTimeEntry({ workItemId: ticketId, date, length: seconds, comment });
+      const ok = await logTimeEntry({ workItemId: ticketId, date, length: seconds, comment, activityTypeId: activityTypeId || undefined });
       if (ok) {
         vscode.window.showInformationMessage(
-          `✓ 7pace: Logged ${formatDurationShort(seconds)} for #${ticketId}`
+          `✓ timeTracker: Logged ${formatDurationShort(seconds)} for #${ticketId}`
         );
         panelProvider.refresh();
       }
@@ -160,17 +158,28 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('7pace-tracker.configure', async () => {
+    vscode.commands.registerCommand('timeTracker.configure', async () => {
       await vscode.commands.executeCommand(
         'workbench.action.openSettings',
-        '7pace-tracker'
+        'timeTracker'
       );
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('7pace-tracker.showPanel', async () => {
-      await vscode.commands.executeCommand('7pace-tracker.mainView.focus');
+    vscode.commands.registerCommand('timeTracker.testConnection', async () => {
+      const result = await testConnection();
+      if (result.ok) {
+        vscode.window.showInformationMessage(`TimeTracker: ${result.message}`);
+      } else {
+        vscode.window.showErrorMessage(`TimeTracker: ${result.message}`);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('timeTracker.showPanel', async () => {
+      await vscode.commands.executeCommand('timeTracker.mainView.focus');
     })
   );
 
@@ -181,7 +190,7 @@ export function activate(context: vscode.ExtensionContext) {
     const watcher = watchBranchChanges(rootPath, (branchInfo) => {
       if (branchInfo.ticketId && !timer.isRunning) {
         vscode.window.setStatusBarMessage(
-          `7pace: Branch → #${branchInfo.ticketId} detected`,
+          `timeTracker: Branch → #${branchInfo.ticketId} detected`,
           4000
         );
       }
@@ -193,11 +202,11 @@ export function activate(context: vscode.ExtensionContext) {
   // Initial check: prompt if not configured
   if (!isConfigured()) {
     vscode.window.showInformationMessage(
-      '7pace Tracker: Please configure your API token and organization URL.',
+      'timeTracker Tracker: Please configure your API token and organization URL.',
       'Open Settings'
     ).then(answer => {
       if (answer === 'Open Settings') {
-        vscode.commands.executeCommand('7pace-tracker.configure');
+        vscode.commands.executeCommand('timeTracker.configure');
       }
     });
   }
@@ -213,7 +222,7 @@ export function deactivate() {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function parseDuration(input: string): number {
+export function parseDuration(input: string): number {
   let seconds = 0;
   const hoursMatch = input.match(/(\d+(?:\.\d+)?)\s*h/i);
   const minutesMatch = input.match(/(\d+(?:\.\d+)?)\s*m/i);
