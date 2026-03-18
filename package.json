@@ -9,6 +9,9 @@
   "categories": [
     "Other"
   ],
+  "repository": {
+    "url": "https://github.com/Julian-B90/timeTracker"
+  },
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
