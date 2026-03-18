@@ -1,71 +1,41 @@
-# timetracker README
+# TimeTracker
 
-This is the README for your extension "timetracker". After writing up a brief description, we recommend including the following sections.
+A VS Code extension for tracking time against Azure DevOps work items using the **7pace Timetracker** API.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- **Sidebar panel** — Start and stop a live timer directly from the Activity Bar. The elapsed time is shown in the status bar and updates every second.
+- **Manual time log** — Log time for any work item with a flexible duration format (`1h 30m`, `45m`, `2h`, or plain minutes).
+- **Branch detection** — Automatically extracts the ticket ID from your current Git branch (e.g. `feature/12345`) and pre-fills the work item field.
+- **Activity types** — Select the activity type (Development, Code Review, etc.) when starting a timer or logging time manually. The default activity is pre-selected automatically.
+- **Recent entries** — Shows your logged work items from the last 7 days including activity type and duration.
+- **Configurable branch pattern** — Customise the regex used to extract ticket IDs from branch names.
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- A running [7pace Timehub](https://www.7pace.com) instance connected to your Azure DevOps organisation.
+- An API token with read/write access to work logs (generate one under **7pace → Settings → API Tokens**).
 
 ## Extension Settings
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+| Setting | Description |
+|---|---|
+| `timeTracker.apiToken` | API token for the 7pace Timetracker. |
+| `timeTracker.instanceUrl` | Your 7pace Timehub instance URL, e.g. `https://myorg.timehub.7pace.com`. |
+| `timeTracker.branchPattern` | Regex to extract the ticket ID from a branch name. The first capture group is used. Default: `(?:feature|bugfix|hotfix|fix|task)[/\\](\d+)`. |
 
-For example:
+Run **TimeTracker: Configure** (or click ⚙ in the panel) to open the settings page directly.
 
-This extension contributes the following settings:
+## Usage
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
-
-## Known Issues
-
-Calling out known issues can help limit users opening duplicate issues against your extension.
+1. Set `timeTracker.apiToken` and `timeTracker.instanceUrl` in VS Code settings.
+2. Open the **TimeTracker** panel in the Activity Bar.
+3. Click **▶ Start Timer** — the ticket ID is pre-filled from your current branch if a match is found.
+4. Click **⏹ Stop & Log** to stop the timer and log the time to 7pace automatically.
+5. Use **📋 Manual Entry** to log time for any past date without starting a timer.
 
 ## Release Notes
 
-Users appreciate release notes as you update your extension.
+### 0.0.1
 
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+Initial release.
